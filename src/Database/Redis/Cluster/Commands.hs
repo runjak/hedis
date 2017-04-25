@@ -15,7 +15,7 @@ getKeysInSlot,
 Info,
 info,
 keyslot,
-meet,
+meet, meet',
 NodeInfo,
 nodes,
 replicate,
@@ -33,7 +33,10 @@ readwrite
 
 import Data.ByteString (ByteString)
 import Database.Redis (RedisCtx, Reply, Status, HostName, PortID)
+import Network.Socket (PortNumber)
 import Prelude hiding (replicate)
+import qualified Data.ByteString.Char8 as Char8
+import qualified Data.Maybe as Maybe
 import qualified Database.Redis as Redis
 
 hashSlots :: Int
@@ -76,8 +79,22 @@ info = undefined -- FIXME IMPLEMENT
 keyslot :: (RedisCtx m f) => m (f Slot)
 keyslot = undefined -- FIXME IMPLEMENT
 
-meet :: (RedisCtx m f) => HostName -> PortID -> m (f Status)
-meet = undefined -- FIXME IMPLEMENT
+meet :: (RedisCtx m f) => HostName -> PortNumber -> m (f Status)
+meet host port = do
+  let host' = Char8.pack host
+      port' = Char8.pack $ show port
+  Redis.sendRequest ["CLUSTER", "MEET", host', port']
+
+-- | Wrap meet for PortID instead of PortNumber.
+meet' :: (RedisCtx m f) => HostName -> PortID -> m (f Status)
+meet' host port =
+  let port' = toClusterPortNumber port
+  in maybe (fail "Invalid PortID given.") (meet host) port'
+  where
+    toClusterPortNumber :: PortID -> Maybe PortNumber
+    toClusterPortNumber (Redis.Service _)    = Nothing
+    toClusterPortNumber (Redis.UnixSocket _) = Nothing
+    toClusterPortNumber (Redis.PortNumber p) = Just $ 10000 + p
 
 data NodeInfo = NodeInfo -- FIXME IMPLEMENT PARSING
 
