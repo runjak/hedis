@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Database.Redis.Cluster.Commands (
+hashSlots,
 Slot,
 addSlots,
 NodeId,
@@ -33,6 +34,9 @@ import Data.ByteString (ByteString)
 import Database.Redis (RedisCtx, Reply, Status, HostName, PortID)
 import Prelude hiding (replicate)
 import qualified Database.Redis as Redis
+
+hashSlots :: Int
+hashSlots = 2^14
 
 type Slot = Int
 
