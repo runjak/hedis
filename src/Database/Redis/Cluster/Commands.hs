@@ -21,6 +21,7 @@ nodes,
 replicate,
 reset,
 saveConfig,
+Epoch,
 setConfigEpoch,
 SetSlotSubcommand,
 setSlot,
@@ -94,7 +95,9 @@ reset = undefined -- FIXME IMPLEMENT
 saveConfig :: (RedisCtx m f) => m (f Status)
 saveConfig = undefined -- FIXME IMPLEMENT
 
-setConfigEpoch :: (RedisCtx m f) => Int -> m (f Status)
+type Epoch = Int
+
+setConfigEpoch :: (RedisCtx m f) => Epoch -> m (f Status)
 setConfigEpoch = undefined -- FIXME IMPLEMENT
 
 data SetSlotSubcommand = Importing NodeId | Migrating NodeId | Stable | Node NodeId
