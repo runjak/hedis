@@ -31,9 +31,21 @@ import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Maybe as Maybe
 import qualified Database.Redis as Redis
 
+readInteger :: ByteString -> Maybe Integer
+readInteger = fmap fst . Char8.readInteger
+
+readPortNumber :: ByteString -> Maybe PortNumber
+readPortNumber x = case reads (Char8.unpack x) of
+  [(p, _)] -> Just p
+  _ -> Nothing
+
 type Slot = Integer
 
 type NodeId = ByteString
+
+readMasterNodeId :: ByteString -> Maybe NodeId
+readMasterNodeId "-"    = Nothing
+readMasterNodeId nodeId = Just nodeId
 
 data FailoverOptions = Force | Takeover
 
@@ -57,6 +69,10 @@ data ClusterState =
     ClusterStateOk
   | ClusterStateFail
   deriving (Show, Eq, Ord)
+
+readClusterState :: ByteString -> ClusterState
+readClusterState "ok" = ClusterStateOk
+readClusterState _    = ClusterStateFail
 
 instance Redis.RedisResult Info where
   decode r@(Redis.Bulk mData) = maybe (Left r) Right $ do
@@ -126,6 +142,20 @@ data NodeInfoFlag =
   | NoFlags   -- | No flags at all.
   deriving (Show, Eq, Ord)
 
+readNodeFlags :: ByteString -> [NodeInfoFlag]
+readNodeFlags = Maybe.catMaybes . fmap go . Char8.split ','
+  where
+    go :: ByteString -> Maybe NodeInfoFlag
+    go "myself"    = Just Myself
+    go "master"    = Just Master
+    go "slave"     = Just Slave
+    go "fail?"     = Just Pfail
+    go "fail"      = Just Fail
+    go "handshake" = Just Handshake
+    go "noaddr"    = Just NoAddr
+    go "noflags"   = Just NoFlags
+    go _           = Nothing
+
 instance Redis.RedisResult NodeInfo where
   decode r@(Redis.SingleLine line) = maybe (Left r) Right $ case Char8.words line of
     (nodeId : hostNamePort : flags : masterNodeId : pingSent : pongRecv : epoch : linkState : slots) ->
@@ -149,10 +179,21 @@ data LinkState =
   | Disconnected
   deriving (Show, Eq, Ord)
 
+readLinkState :: ByteString -> Maybe LinkState
+readLinkState "connected"    = Just Connected
+readLinkState "disconnected" = Just Disconnected
+readLinkState _ = Nothing
+
 data NodeSlot =
     SingleSlot Slot
   | SlotRange Slot Slot
   deriving (Show, Eq, Ord)
+
+readNodeSlot :: ByteString -> Maybe NodeSlot
+readNodeSlot x = case Char8.split '-' x of
+  [start, end] -> SlotRange <$> readInteger start <*> readInteger end
+  [slot]       -> SingleSlot <$> readInteger slot
+  _ -> Nothing
 
 testNodeInfoData :: Redis.Reply
 testNodeInfoData = Redis.MultiBulk . Just $ fmap Redis.SingleLine [
@@ -242,46 +283,3 @@ testSlotMapData =
 
 testSlotMapDecode :: Either Redis.Reply [SlotMap]
 testSlotMapDecode = Redis.decode testSlotMapData
-
--- READ HELPERS: FIXME BETTER PLACEMENTS!
-
-readInteger :: ByteString -> Maybe Integer
-readInteger = fmap fst . Char8.readInteger
-
-readLinkState :: ByteString -> Maybe LinkState
-readLinkState "connected"    = Just Connected
-readLinkState "disconnected" = Just Disconnected
-readLinkState _ = Nothing
-
-readNodeSlot :: ByteString -> Maybe NodeSlot
-readNodeSlot x = case Char8.split '-' x of
-  [start, end] -> SlotRange <$> readInteger start <*> readInteger end
-  [slot]       -> SingleSlot <$> readInteger slot
-  _ -> Nothing
-
-readMasterNodeId :: ByteString -> Maybe NodeId
-readMasterNodeId "-"    = Nothing
-readMasterNodeId nodeId = Just nodeId
-
-readNodeFlags :: ByteString -> [NodeInfoFlag]
-readNodeFlags = Maybe.catMaybes . fmap go . Char8.split ','
-  where
-    go :: ByteString -> Maybe NodeInfoFlag
-    go "myself"    = Just Myself
-    go "master"    = Just Master
-    go "slave"     = Just Slave
-    go "fail?"     = Just Pfail
-    go "fail"      = Just Fail
-    go "handshake" = Just Handshake
-    go "noaddr"    = Just NoAddr
-    go "noflags"   = Just NoFlags
-    go _           = Nothing
-
-readClusterState :: ByteString -> ClusterState
-readClusterState "ok" = ClusterStateOk
-readClusterState _    = ClusterStateFail
-
-readPortNumber :: ByteString -> Maybe PortNumber
-readPortNumber x = case reads (Char8.unpack x) of
-  [(p, _)] -> Just p
-  _ -> Nothing
