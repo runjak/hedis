@@ -14,6 +14,8 @@ ResetOptions(..),
 Epoch,
 SetSlotSubcommand(..),
 SlotMap,
+SlotMapEntry(..),
+SlotMapEntryNode
 ) where
 
 import Data.ByteString (ByteString)
@@ -48,7 +50,7 @@ data Info = Info {
   clusterMyEpoch               :: Integer,
   clusterStatsMessagesSent     :: Integer,
   clusterStatsMessagesReceived :: Integer
-  } deriving (Show, Eq, Ord) -- FIXME IMPLEMENT PARSING
+  } deriving (Show, Eq, Ord)
 
 data ClusterState =
     ClusterStateOk
@@ -59,7 +61,7 @@ instance Redis.RedisResult Info where
   decode r@(Redis.Bulk mData) = maybe (Left r) Right $ do
     lines <- fmap (fmap (Char8.filter (/= '\r')) . Char8.lines) mData
     let entries   = HashMap.fromList . Maybe.catMaybes $ fmap mkTuple lines
-        lookup  k = readInteger <$> HashMap.lookup k entries
+        lookup  k = readInteger =<< HashMap.lookup k entries
         lookup' k = readClusterState <$> HashMap.lookup k entries
     Info <$> lookup' "cluster_state"
          <*> lookup  "cluster_slots_assigned"
@@ -124,22 +126,21 @@ data NodeInfoFlag =
   deriving (Show, Eq, Ord)
 
 instance Redis.RedisResult NodeInfo where
-  decode r@(Redis.SingleLine line) = case Char8.words line of
-    (nodeId : hostNamePort : flags' : masterNodeId' : pingSent' : pongRecv' : epoch : linkState' : slots') ->
-      let [hostName, port'] = Char8.split ':' hostNamePort
-      in Right $ NodeInfo {
-        nodeId       = nodeId
-      , hostName     = Char8.unpack hostName
-      , port         = read $ Char8.unpack port'
-      , flags        = readNodeFlags flags'
-      , masterNodeId = readMasterNodeId masterNodeId'
-      , pingSent     = readInteger pingSent'
-      , pongRecv     = readInteger pongRecv'
-      , configEpoch  = readInteger epoch
-      , linkState    = readLinkState linkState'
-      , slots        = fmap readNodeSlot slots'
-      }
-    _ -> Left r
+  decode r@(Redis.SingleLine line) = maybe (Left r) Right $ case Char8.words line of
+    (nodeId : hostNamePort : flags : masterNodeId : pingSent : pongRecv : epoch : linkState : slots) ->
+      case Char8.split ':' hostNamePort of
+        [hostName, port] -> NodeInfo <$> pure nodeId
+                                     <*> pure (Char8.unpack hostName)
+                                     <*> readPortNumber port
+                                     <*> pure (readNodeFlags flags)
+                                     <*> pure (readMasterNodeId masterNodeId)
+                                     <*> readInteger pingSent
+                                     <*> readInteger pongRecv
+                                     <*> readInteger epoch
+                                     <*> readLinkState linkState
+                                     <*> pure (Maybe.catMaybes $ fmap readNodeSlot slots)
+        _ -> Nothing
+    _ -> Nothing
   decode r = Left r
 
 data LinkState =
@@ -171,22 +172,84 @@ type Epoch = Integer
 
 data SetSlotSubcommand = Importing NodeId | Migrating NodeId | Stable | Node NodeId
 
-data SlotMap = SlotMap -- FIXME IMPLEMENT SlotMap Redis.RedisResult instance
+type SlotMap = [SlotMapEntry]
+
+data SlotMapEntry = SlotMapEntry {
+  startSlot  :: Slot,
+  endSlot    :: Slot,
+  masterNode :: SlotMapEntryNode,
+  slaveNodes :: [SlotMapEntryNode]
+} deriving (Show, Eq, Ord)
+
+type SlotMapEntryNode = Either (HostName, PortNumber) (HostName, PortNumber, NodeId)
+
+{-
+1) 1) (integer) 0
+   2) (integer) 4095
+   3) 1) "127.0.0.1"
+      2) (integer) 7000
+   4) 1) "127.0.0.1"
+      2) (integer) 7004
+2) 1) (integer) 12288
+   2) (integer) 16383
+   3) 1) "127.0.0.1"
+      2) (integer) 7003
+   4) 1) "127.0.0.1"
+      2) (integer) 7007
+3) 1) (integer) 4096
+   2) (integer) 8191
+   3) 1) "127.0.0.1"
+      2) (integer) 7001
+   4) 1) "127.0.0.1"
+      2) (integer) 7005
+4) 1) (integer) 8192
+   2) (integer) 12287
+   3) 1) "127.0.0.1"
+      2) (integer) 7002
+   4) 1) "127.0.0.1"
+      2) (integer) 7006
+
+1) 1) (integer) 0
+ 2) (integer) 5460
+ 3) 1) "127.0.0.1"
+    2) (integer) 30001
+    3) "09dbe9720cda62f7865eabc5fd8857c5d2678366"
+ 4) 1) "127.0.0.1"
+    2) (integer) 30004
+    3) "821d8ca00d7ccf931ed3ffc7e3db0599d2271abf"
+2) 1) (integer) 5461
+ 2) (integer) 10922
+ 3) 1) "127.0.0.1"
+    2) (integer) 30002
+    3) "c9d93d9f2c0c524ff34cc11838c2003d8c29e013"
+ 4) 1) "127.0.0.1"
+    2) (integer) 30005
+    3) "faadb3eb99009de4ab72ad6b6ed87634c7ee410f"
+3) 1) (integer) 10923
+ 2) (integer) 16383
+ 3) 1) "127.0.0.1"
+    2) (integer) 30003
+    3) "044ec91f325b7595e76dbcb18cc688b6a5b434a1"
+ 4) 1) "127.0.0.1"
+    2) (integer) 30006
+    3) "58e6e48d41228013e5d9c1c37c5060693925e97e"
+-}
 
 -- READ HELPERS: FIXME BETTER PLACEMENTS!
 
-readInteger :: ByteString -> Integer
-readInteger = fst . Maybe.fromJust . Char8.readInteger
+readInteger :: ByteString -> Maybe Integer
+readInteger = fmap fst . Char8.readInteger
 
-readLinkState :: ByteString -> LinkState
-readLinkState "connected"    = Connected
-readLinkState "disconnected" = Disconnected
-readLinkState x = error $ "Undefined LinkState: " <> (show x)
+readLinkState :: ByteString -> Maybe LinkState
+readLinkState "connected"    = Just Connected
+readLinkState "disconnected" = Just Disconnected
+readLinkState _ = Nothing
 
-readNodeSlot :: ByteString -> NodeSlot
+readNodeSlot :: ByteString -> Maybe NodeSlot
 readNodeSlot x = case Char8.split '-' x of
-  [start, end] -> (SlotRange `on` readInteger) start end
-  [slot]       -> SingleSlot $ readInteger slot
+  [start, end] -> SlotRange <$> readInteger start <*> readInteger end
+  [slot]       -> SingleSlot <$> readInteger slot
+  _ -> Nothing
 
 readMasterNodeId :: ByteString -> Maybe NodeId
 readMasterNodeId "-"    = Nothing
@@ -209,3 +272,8 @@ readNodeFlags = Maybe.catMaybes . fmap go . Char8.split ','
 readClusterState :: ByteString -> ClusterState
 readClusterState "ok" = ClusterStateOk
 readClusterState _    = ClusterStateFail
+
+readPortNumber :: ByteString -> Maybe PortNumber
+readPortNumber x = case reads (Char8.unpack x) of
+  [(p, _)] -> Just p
+  _ -> Nothing
