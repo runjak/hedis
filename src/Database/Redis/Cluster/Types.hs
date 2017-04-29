@@ -15,7 +15,7 @@ Epoch,
 SetSlotSubcommand(..),
 SlotMap,
 SlotMapEntry(..),
-SlotMapEntryNode
+SlotMapEntryNode(..)
 ) where
 
 import Data.ByteString (ByteString)
@@ -26,6 +26,7 @@ import Network.Socket (PortNumber)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as Char8
 import qualified Data.Char as Char
+import qualified Data.Either as Either
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.Maybe as Maybe
 import qualified Database.Redis as Redis
@@ -181,59 +182,66 @@ data SlotMapEntry = SlotMapEntry {
   slaveNodes :: [SlotMapEntryNode]
 } deriving (Show, Eq, Ord)
 
-type SlotMapEntryNode = Either (HostName, PortNumber) (HostName, PortNumber, NodeId)
+instance Redis.RedisResult SlotMapEntry where
+  decode r@(Redis.MultiBulk (Just (
+      Redis.SingleLine startSlot
+    : Redis.SingleLine endSlot
+    : nodes))) =
+    let entryNodes = Either.rights $ fmap Redis.decode nodes
+    in maybe (Left r) Right $ case entryNodes of
+      (masterNode:slaveNodes) -> SlotMapEntry <$> readInteger startSlot
+                                              <*> readInteger endSlot
+                                              <*> pure masterNode
+                                              <*> pure slaveNodes
+      _ -> Nothing
+  decode r = Left r
 
-{-
-1) 1) (integer) 0
-   2) (integer) 4095
-   3) 1) "127.0.0.1"
-      2) (integer) 7000
-   4) 1) "127.0.0.1"
-      2) (integer) 7004
-2) 1) (integer) 12288
-   2) (integer) 16383
-   3) 1) "127.0.0.1"
-      2) (integer) 7003
-   4) 1) "127.0.0.1"
-      2) (integer) 7007
-3) 1) (integer) 4096
-   2) (integer) 8191
-   3) 1) "127.0.0.1"
-      2) (integer) 7001
-   4) 1) "127.0.0.1"
-      2) (integer) 7005
-4) 1) (integer) 8192
-   2) (integer) 12287
-   3) 1) "127.0.0.1"
-      2) (integer) 7002
-   4) 1) "127.0.0.1"
-      2) (integer) 7006
+data SlotMapEntryNode = SlotMapEntryNode {
+  slotMapHostName   :: HostName,
+  slotMapPortNumber :: PortNumber,
+  slotMapNodeId     :: Maybe NodeId
+} deriving (Show, Eq, Ord)
 
-1) 1) (integer) 0
- 2) (integer) 5460
- 3) 1) "127.0.0.1"
-    2) (integer) 30001
-    3) "09dbe9720cda62f7865eabc5fd8857c5d2678366"
- 4) 1) "127.0.0.1"
-    2) (integer) 30004
-    3) "821d8ca00d7ccf931ed3ffc7e3db0599d2271abf"
-2) 1) (integer) 5461
- 2) (integer) 10922
- 3) 1) "127.0.0.1"
-    2) (integer) 30002
-    3) "c9d93d9f2c0c524ff34cc11838c2003d8c29e013"
- 4) 1) "127.0.0.1"
-    2) (integer) 30005
-    3) "faadb3eb99009de4ab72ad6b6ed87634c7ee410f"
-3) 1) (integer) 10923
- 2) (integer) 16383
- 3) 1) "127.0.0.1"
-    2) (integer) 30003
-    3) "044ec91f325b7595e76dbcb18cc688b6a5b434a1"
- 4) 1) "127.0.0.1"
-    2) (integer) 30006
-    3) "58e6e48d41228013e5d9c1c37c5060693925e97e"
--}
+instance Redis.RedisResult SlotMapEntryNode where
+  decode r@(Redis.MultiBulk (Just [
+      Redis.SingleLine hostName
+    , Redis.SingleLine portNumber
+    ])) = maybe (Left r) Right $
+          SlotMapEntryNode <$> pure (Char8.unpack hostName)
+                           <*> readPortNumber portNumber
+                           <*> pure Nothing
+  decode r@(Redis.MultiBulk (Just [
+      Redis.SingleLine hostName
+    , Redis.SingleLine portNumber
+    , Redis.SingleLine nodeId
+    ])) = maybe (Left r) Right $
+          SlotMapEntryNode <$> pure (Char8.unpack hostName)
+                           <*> readPortNumber portNumber
+                           <*> pure (Just nodeId)
+  decode r = Left r
+
+testSlotMapData :: Redis.Reply
+testSlotMapData =
+  let l = Redis.SingleLine
+      m = Redis.MultiBulk . Just
+      a = m . fmap l
+  in m [
+      m [
+        m [l "0",     l "4095",  a ["127.0.0.1", "7000"], a ["127.0.0.1", "7004"]]
+      , m [l "12288", l "16383", a ["127.0.0.1", "7003"], a ["127.0.0.1", "7007"]]
+      , m [l "4096",  l "8191",  a ["127.0.0.1", "7001"], a ["127.0.0.1", "7005"]]
+      , m [l "8192",  l "12287", a ["127.0.0.1", "7002"], a ["127.0.0.1", "7006"]]]
+    , m [
+        m [l "0",     l "5460",  a ["127.0.0.1", "30001", "09dbe9720cda62f7865eabc5fd8857c5d2678366"]
+                              ,  a ["127.0.0.1", "30004", "821d8ca00d7ccf931ed3ffc7e3db0599d2271abf"]]
+      , m [l "5461",  l "10922", a ["127.0.0.1", "30002", "c9d93d9f2c0c524ff34cc11838c2003d8c29e013"]
+                               , a ["127.0.0.1", "30005", "faadb3eb99009de4ab72ad6b6ed87634c7ee410f"]]
+      , m [l "10923", l "16383", a ["127.0.0.1", "30003", "044ec91f325b7595e76dbcb18cc688b6a5b434a1"]
+                               , a ["127.0.0.1", "30006", "58e6e48d41228013e5d9c1c37c5060693925e97e"]]]
+    ]
+
+testSlotMapDecode :: Either Redis.Reply [SlotMap]
+testSlotMapDecode = Redis.decode testSlotMapData
 
 -- READ HELPERS: FIXME BETTER PLACEMENTS!
 
