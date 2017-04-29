@@ -28,7 +28,7 @@ import Data.Monoid ((<>))
 import Database.Redis (RedisCtx, Reply, Status, HostName, PortID)
 import Network.Socket (PortNumber)
 import Prelude hiding (replicate)
-import Database.Redis.Cluster.Types
+import Database.Redis.Cluster.Types hiding (slots)
 import qualified Data.ByteString.Char8 as Char8
 import qualified Data.Maybe as Maybe
 import qualified Database.Redis as Redis
@@ -72,10 +72,10 @@ getKeysInSlot :: (RedisCtx m f) => Slot -> Count -> m (f [ByteString])
 getKeysInSlot slot count =
   let slot' = Char8.pack $ show slot
       count' = Char8.pack $ show count
-  in Redis.sendRequest ["CLUSTER", "GETKEYSINSLOT", slot', count'] -- FIXME TEST, VERIFY RESULT PARSING
+  in Redis.sendRequest ["CLUSTER", "GETKEYSINSLOT", slot', count'] -- FIXME TEST
 
 info :: (RedisCtx m f) => m (f Info)
-info = undefined -- Redis.sendRequest ["CLUSTER", "INFO"] -- FIXME IMPLEMENT
+info = Redis.sendRequest ["CLUSTER", "INFO"] -- FIXME TEST
 
 keyslot :: (RedisCtx m f) => Key -> m (f Slot)
 keyslot key = Redis.sendRequest ["CLUSTER", "KEYSLOT", key] -- FIXME TEST
@@ -98,7 +98,7 @@ meet' host port =
     toClusterPortNumber (Redis.PortNumber p) = Just $ 10000 + p
 
 nodes :: (RedisCtx m f) => m (f [NodeInfo])
-nodes = undefined -- Redis.sendRequest ["CLUSTER", "NODES"] -- FIXME IMPLEMENT
+nodes = Redis.sendRequest ["CLUSTER", "NODES"] -- FIXME TEST
 
 replicate :: (RedisCtx m f) => NodeId -> m (f Status)
 replicate nodeId =  -- FIXME TEST
@@ -132,10 +132,10 @@ setSlot slot slotCommand -- FIXME TEST
 slaves :: (RedisCtx m f) => NodeId -> m (f [NodeInfo])
 slaves nodeId =
   let nodeId' = Char8.pack $ show nodeId
-  in undefined -- Redis.sendRequest ["CLUSTER", "SLAVES", nodeId'] -- FIXME IMPLEMENT
+  in Redis.sendRequest ["CLUSTER", "SLAVES", nodeId'] -- FIXME TEST
 
 slots :: (RedisCtx m f) => m (f SlotMap)
-slots = undefined -- Redis.sendRequest ["CLUSTER", "SLOTS"] -- FIXME IMPLEMENT
+slots = Redis.sendRequest ["CLUSTER", "SLOTS"] -- FIXME TEST
 
 readonly :: (RedisCtx m f) => m (f Status)
 readonly = Redis.sendRequest ["READONLY"]  -- FIXME TEST
